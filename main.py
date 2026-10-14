@@ -2,6 +2,7 @@
 import cv2
 from ultralytics import YOLO
 import time
+from collections import Counter
 
 # Pretrained object detection model
 model = YOLO("yolo26n.pt")
@@ -26,6 +27,12 @@ while True:
     results = model(frame, conf=0.6, verbose=True) 
     # verbose=True to print detection results
     # default conf = 0.25
+    
+    result = results[0]  
+    inference_ms = result.speed["inference"]
+
+    class_counts = Counter()
+    total_objects = len(result.boxes)
 
     # read detected objects
     for box in results[0].boxes:
@@ -33,6 +40,7 @@ while True:
         confidence = float(box.conf[0])
         class_id = int(box.cls[0])
         class_name = model.names[class_id]
+        class_counts[class_name] += 1
 
         # draw bounding box
         cv2.rectangle( frame,
@@ -49,23 +57,57 @@ while True:
                     (179, 53, 252), 
                     1)
 
-        curr_time = time.perf_counter()
-        elapsed_time = curr_time - prev_time
-        fps = 1 / elapsed_time if elapsed_time > 0 else 0
-        prev_time = curr_time
+    # application fps: calculate one time per frame
+    curr_time = time.perf_counter()
+    elapsed_time = curr_time - prev_time
+    fps = 1 / elapsed_time if elapsed_time > 0 else 0
+    prev_time = curr_time
 
-        cv2.putText(frame, 
-                    f"FPS: {fps:.2f}",
-                    (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1, 
-                    (255, 250, 45), 
-                    1)
+    panel_lines = [
+        "VisionDesk",
+        f"FPS: {fps:.1f}",
+        f"Inference time: {inference_ms:.1f} ms",
+        f"Objects in frame: {total_objects}",
+        "",
+        "Detection Statistics:"
+    ]
 
+    if class_counts: 
+        for class_name, count in sorted(class_counts.items()):
+            panel_lines.append(f"{class_name}: {count}")
+    else:
+        panel_lines.append("No objects detected")
 
+    image_width = frame.shape[1]
+    panel_width = 340
+    line_height = 28
+    required_height = 30 + len(panel_lines) * line_height
+    bottom_padding = max(0, required_height - frame.shape[0])
+
+    display_frame = cv2.copyMakeBorder(
+        frame,
+        0,
+        bottom_padding,
+        0,
+        panel_width,
+        cv2.BORDER_CONSTANT,
+        value=(25, 25, 25),
+    )
+
+    for index, text in enumerate(panel_lines):
+        cv2.putText(
+            display_frame,
+            text,
+            (image_width + 15, 30 + index * line_height),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (230, 230, 230),
+            1,
+            cv2.LINE_AA,
+        )
 
     # Display live output
-    cv2.imshow("VisionDesk", frame)
+    cv2.imshow("VisionDesk", display_frame)
 
     # Press Q to exit
     if cv2.waitKey(1) & 0xFF == ord("q"):
