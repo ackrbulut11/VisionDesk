@@ -38,32 +38,17 @@ def get_finger_states(hand_landmarks):
     normalized_thumb_distance = thumb_distance / hand_size if hand_size else 0
     thumb_open = normalized_thumb_distance > 0.45
 
-    thumb_direction = (
-        landmarks[4].x - landmarks[2].x,
-        landmarks[4].y - landmarks[2].y,
-    )
-    palm_direction = (
-        landmarks[9].x - landmarks[0].x,
-        landmarks[9].y - landmarks[0].y,
+    # MediaPipe image y-coordinates increase from top to bottom.
+    # Normalize by hand size so the threshold is less sensitive to camera distance.
+    thumb_vertical_delta = (
+        (thumb_tip.y - landmarks[2].y) / hand_size if hand_size else 0
     )
 
-    thumb_length = math.hypot(*thumb_direction)
-    palm_length = math.hypot(*palm_direction)
-
-    if thumb_length > 0 and palm_length > 0:
-        alignment = (
-            thumb_direction[0] * palm_direction[0]
-            + thumb_direction[1] * palm_direction[1]
-        ) / (thumb_length * palm_length)
-        thumb_points_along_palm = alignment > 0.7
-    else:
-        thumb_points_along_palm = False
-
-    return thumb_open, thumb_points_along_palm, non_thumb_fingers_open
+    return thumb_open, thumb_vertical_delta, non_thumb_fingers_open
 
 
 def classify_gesture(hand_landmarks):
-    thumb_open, thumb_points_along_palm, non_thumb_fingers_open = get_finger_states(hand_landmarks)
+    thumb_open, thumb_vertical_delta, non_thumb_fingers_open = get_finger_states(hand_landmarks)
 
     if thumb_open and all(non_thumb_fingers_open):
         return "Open Palm"
@@ -71,8 +56,13 @@ def classify_gesture(hand_landmarks):
     if not thumb_open and not any(non_thumb_fingers_open):
         return "Fist"
 
-    if thumb_open and thumb_points_along_palm and not any(non_thumb_fingers_open):
-        return "Thumbs Up"
+    other_fingers_closed = not any(non_thumb_fingers_open)
+
+    if thumb_open and other_fingers_closed:
+        if thumb_vertical_delta < -0.15:
+            return "Thumbs Up"
+        if thumb_vertical_delta > 0.15:
+            return "Thumbs Down"
 
     return "Unknown"
 
@@ -123,7 +113,7 @@ try:
                     hand_label = handedness_results[index].classification[0].label
 
 
-                thumb_open, thumb_points_along_palm, non_thumb_fingers_open = get_finger_states(hand_landmarks)
+                thumb_open, thumb_vertical_delta, non_thumb_fingers_open = get_finger_states(hand_landmarks)
                 open_finger_count = sum(non_thumb_fingers_open) + int(thumb_open)
 
                 cv2.putText(
