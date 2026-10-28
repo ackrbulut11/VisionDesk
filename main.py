@@ -12,25 +12,16 @@ YOLO_CONFIG_DIR.mkdir(exist_ok=True)
 os.environ.setdefault("YOLO_CONFIG_DIR", str(YOLO_CONFIG_DIR))
 
 import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
 from ultralytics import YOLO
 
 # Models and camera
-HAND_MODEL_PATH = Path("models/hand_landmarker.task")
-if not HAND_MODEL_PATH.exists():
-    raise FileNotFoundError(
-        f"Hand model not found: {HAND_MODEL_PATH}. "
-        "Download the MediaPipe Hand Landmarker task model and place it there."
-    )
-
 model = YOLO("yolo26n.pt")
-hand_options = vision.HandLandmarkerOptions(
-    base_options=python.BaseOptions(model_asset_path=str(HAND_MODEL_PATH.resolve())),
-    running_mode=vision.RunningMode.VIDEO,
-    num_hands=1,
-    min_hand_detection_confidence=0.6,
-    min_hand_presence_confidence=0.6,
+mp_hands = mp.solutions.hands
+mp_draw = mp.solutions.drawing_utils
+hands = mp_hands.Hands(
+    static_image_mode=False,
+    max_num_hands=1,
+    min_detection_confidence=0.6,
     min_tracking_confidence=0.5,
 )
 
@@ -104,26 +95,8 @@ def stable_gesture(history):
     return gesture if gesture != "Unknown" and votes >= STABLE_VOTES else "Unknown"
 
 
-hands = vision.HandLandmarker.create_from_options(hand_options)
-
-# Hand landmark connections used by MediaPipe's task result.
-HAND_CONNECTIONS = [
-    (0, 1), (1, 2), (2, 3), (3, 4),
-    (0, 5), (5, 6), (6, 7), (7, 8),
-    (5, 9), (9, 10), (10, 11), (11, 12),
-    (9, 13), (13, 14), (14, 15), (15, 16),
-    (13, 17), (17, 18), (18, 19), (19, 20),
-    (0, 17),
-]
-
-
 def draw_hand_landmarks(frame, landmarks):
-    height, width = frame.shape[:2]
-    points = [(int(point.x * width), int(point.y * height)) for point in landmarks]
-    for start, end in HAND_CONNECTIONS:
-        cv2.line(frame, points[start], points[end], (80, 220, 80), 2)
-    for point in points:
-        cv2.circle(frame, point, 4, (180, 50, 240), -1)
+    mp_draw.draw_landmarks(frame, landmarks, mp_hands.HAND_CONNECTIONS)
 
 try:
     while True:
@@ -135,13 +108,11 @@ try:
         # Mirror both the camera display and the hand coordinates users see.
         frame = cv2.flip(frame, 1)
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        timestamp_ms = int(time.perf_counter() * 1000)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-        hand_results = hands.detect_for_video(mp_image, timestamp_ms)
+        hand_results = hands.process(rgb_frame)
 
         current_gesture = "Unknown"
-        if hand_results.hand_landmarks:
-            hand_landmarks = hand_results.hand_landmarks[0]
+        if hand_results.multi_hand_landmarks:
+            hand_landmarks = hand_results.multi_hand_landmarks[0]
             draw_hand_landmarks(frame, hand_landmarks)
             current_gesture = classify_gesture(hand_landmarks)
         # Add Unknown when no hand is visible, so an old command cannot remain active.
@@ -166,6 +137,7 @@ try:
             elif gesture == "Fist":
                 show_detections = not show_detections
             elif gesture == "Thumbs Down":
+                print("Thumbs Down - break.")
                 break
             previous_stable_gesture = gesture
 
