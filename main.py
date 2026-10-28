@@ -42,43 +42,62 @@ screenshot_dir = Path("C:\\Users\\ackrb\\Desktop\\python\\Learn-ComputerVision\\
 screenshot_dir.mkdir(exist_ok=True)
 
 
-def get_finger_states(hand_landmarks):
+def get_finger_states(hand_landmarks, frame_shape):
     landmarks = hand_landmarks.landmark if hasattr(hand_landmarks, "landmark") else hand_landmarks
-    finger_pairs = [(8, 6), (12, 10), (16, 14), (20, 18)]
-    non_thumb_fingers_open = [
-        landmarks[tip_id].y < landmarks[pip_id].y
-        for tip_id, pip_id in finger_pairs
-    ]
+    height, width = frame_shape[:2]
 
-    thumb_tip = landmarks[4]
-    index_base = landmarks[5]
-    thumb_distance = math.hypot(
-        thumb_tip.x - index_base.x,
-        thumb_tip.y - index_base.y,
-    )
-    wrist = landmarks[0]
-    middle_base = landmarks[9]
-    hand_size = math.hypot(
-        wrist.x - middle_base.x,
-        wrist.y - middle_base.y,
-    )
+    # Convert normalized landmarks to pixels before measuring angles, because
+    # MediaPipe normalizes x by image width and y by image height separately.
+    def point(index):
+        landmark = landmarks[index]
+        return landmark.x * width, landmark.y * height
 
+    def joint_angle(first, joint, last):
+        ax, ay = point(first)
+        bx, by = point(joint)
+        cx, cy = point(last)
+        vector_a = (ax - bx, ay - by)
+        vector_b = (cx - bx, cy - by)
+        length_a = math.hypot(*vector_a)
+        length_b = math.hypot(*vector_b)
+        if not length_a or not length_b:
+            return 0.0
+        cosine = sum(a * b for a, b in zip(vector_a, vector_b)) / (length_a * length_b)
+        return math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
+
+    # MCP (örn 5)-> PIP(örn 6) -> fingertip (örn 8): straight fingers are near 180 degrees.
+    finger_chains = [(5, 6, 8), (9, 10, 12), (13, 14, 16), (17, 18, 20)]
+    finger_angles = [joint_angle(*chain) for chain in finger_chains]
+    fingers_open = [angle >= 150 for angle in finger_angles]
+    fingers_closed = [angle <= 130 for angle in finger_angles]
+
+    # The thumb must be straight at its IP joint AND extended away from the palm.
+    thumb_angle = joint_angle(2, 3, 4)
+    thumb_tip = point(4)
+    index_base = point(5)
+    wrist = point(0)
+    middle_base = point(9)
+    thumb_distance = math.hypot(thumb_tip[0] - index_base[0], thumb_tip[1] - index_base[1])
+    hand_size = math.hypot(wrist[0] - middle_base[0], wrist[1] - middle_base[1])
     normalized_thumb_distance = thumb_distance / hand_size if hand_size else 0
-    thumb_open = normalized_thumb_distance > 0.45
+    thumb_open = thumb_angle >= 150 and normalized_thumb_distance >= 0.35
+
     thumb_vertical_delta = (
-        (thumb_tip.y - landmarks[2].y) / hand_size if hand_size else 0
+        (thumb_tip[1] - point(2)[1]) / hand_size if hand_size else 0
     )
-    return thumb_open, thumb_vertical_delta, non_thumb_fingers_open
+    return thumb_open, thumb_vertical_delta, fingers_open, fingers_closed
 
 
-def classify_gesture(hand_landmarks):
-    thumb_open, thumb_vertical_delta, fingers_open = get_finger_states(hand_landmarks)
+def classify_gesture(hand_landmarks, frame_shape):
+    thumb_open, thumb_vertical_delta, fingers_open, fingers_closed = get_finger_states(
+        hand_landmarks, frame_shape
+    )
 
     if thumb_open and all(fingers_open):
         return "Open Palm"
-    if not thumb_open and not any(fingers_open):
+    if not thumb_open and all(fingers_closed):
         return "Fist"
-    if thumb_open and not any(fingers_open):
+    if thumb_open and all(fingers_closed):
         if thumb_vertical_delta < -0.15:
             return "Thumbs Up"
         if thumb_vertical_delta > 0.15:
@@ -114,7 +133,7 @@ try:
         if hand_results.multi_hand_landmarks:
             hand_landmarks = hand_results.multi_hand_landmarks[0]
             draw_hand_landmarks(frame, hand_landmarks)
-            current_gesture = classify_gesture(hand_landmarks)
+            current_gesture = classify_gesture(hand_landmarks, frame.shape)
         # Add Unknown when no hand is visible, so an old command cannot remain active.
         gesture_history.append(current_gesture)
         gesture = stable_gesture(gesture_history)
